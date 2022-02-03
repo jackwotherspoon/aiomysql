@@ -26,7 +26,7 @@ jobs:
           - '3.8'
           - '3.9'
           - '3.10'
-          # - '3.11.0-alpha.4'
+          - '3.11-dev'
 
       fail-fast: false
     runs-on: ${{ matrix.os }}
