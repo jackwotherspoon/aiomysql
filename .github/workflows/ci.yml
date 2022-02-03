@@ -226,3 +226,4 @@ jobs:
         file: ./coverage.xml
         flags: "${{ matrix.os }}_${{ matrix.py }}"
         fail_ci_if_error: true
+        verbose: true
