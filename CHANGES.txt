@@ -14,6 +14,8 @@ next (unreleased)
 
 * Add `implicit_tls` connect arg to support non-standard implicit TLS connections, such as Google Cloud SQL #757
 
+* Fix debug log level with sha256_password authentication #863
+
 0.1.1 (2022-05-08)
 ^^^^^^^^^^^^^^^^^^
 

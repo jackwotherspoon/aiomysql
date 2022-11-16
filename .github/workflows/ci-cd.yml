@@ -130,7 +130,7 @@ jobs:
     - name: Set up pip cache
       if: >-
         steps.request-check.outputs.release-requested != 'true'
-      uses: actions/cache@v3.0.8
+      uses: actions/cache@v3.0.11
       with:
         path: ${{ steps.pip-cache-dir.outputs.dir }}
         key: >-
@@ -239,7 +239,7 @@ jobs:
       run: >-
         echo "::set-output name=dir::$(python -m pip cache dir)"
     - name: Set up pip cache
-      uses: actions/cache@v3.0.8
+      uses: actions/cache@v3.0.11
       with:
         path: ${{ steps.pip-cache-dir.outputs.dir }}
         key: >-
@@ -343,7 +343,7 @@ jobs:
       run: >-
         echo "::set-output name=dir::$(python -m pip cache dir)"
     - name: Set up pip cache
-      uses: actions/cache@v3.0.8
+      uses: actions/cache@v3.0.11
       with:
         path: ${{ steps.pip-cache-dir.outputs.dir }}
         key: >-
@@ -459,6 +459,7 @@ jobs:
 
     steps:
     - name: Setup Python ${{ matrix.py }}
+      id: python-install
       uses: actions/setup-python@v4
       with:
         python-version: ${{ matrix.py }}
@@ -494,7 +495,7 @@ jobs:
 
     - name: Set up pip cache
       if: fromJSON(steps.py-abi.outputs.is-stable-abi)
-      uses: actions/cache@v3.0.8
+      uses: actions/cache@v3.0.11
       with:
         path: ${{ steps.pip-cache-dir.outputs.dir }}
         key: >-
@@ -638,10 +639,16 @@ jobs:
 
     - name: Upload coverage
       if: ${{ github.event_name != 'schedule' }}
-      uses: codecov/codecov-action@v3.1.0
+      uses: codecov/codecov-action@v3.1.1
       with:
         file: ./coverage.xml
-        flags: "${{ matrix.os }}_${{ matrix.py }}_${{ join(matrix.db, '-') }}"
+        flags: >-
+          CI-GHA,
+          OS-${{ runner.os }},
+          VM-${{ matrix.os }},
+          Py-${{ steps.python-install.outputs.python-version }},
+          DB-${{ join(matrix.db, '-') }},
+          ${{ matrix.os }}_${{ matrix.py }}_${{ join(matrix.db, '-') }}
         fail_ci_if_error: true
 
   check:  # This job does nothing and is only used for the branch protection
@@ -655,7 +662,7 @@ jobs:
 
     steps:
     - name: Decide whether the needed jobs succeeded or failed
-      uses: re-actors/alls-green@v1.1.0
+      uses: re-actors/alls-green@v1.2.2
       with:
         jobs: ${{ toJSON(needs) }}
 
@@ -781,7 +788,7 @@ jobs:
     - name: >-
         Publish a GitHub Release for
         ${{ needs.pre-setup.outputs.git-tag }}
-      uses: ncipollo/release-action@58ae73b360456532aafd58ee170c045abbeaee37
+      uses: ncipollo/release-action@4c75f0f2e4ae5f3c807cf0904605408e319dcaac
       with:
         artifacts: |
           dist/${{ needs.pre-setup.outputs.sdist-artifact-name }}
