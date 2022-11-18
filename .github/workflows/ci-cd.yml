@@ -1,9 +1,6 @@
 name: CI/CD
 
 on:
-  push:
-    branches-ignore:
-    - dependabot/**
   pull_request:
   schedule:
   - cron: 1 0 * * *  # Run daily at 0:01 UTC
