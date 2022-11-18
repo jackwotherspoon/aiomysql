@@ -1,36 +1,7 @@
 name: CI/CD
 
 on:
-  push:
-    branches-ignore:
-    - dependabot/**
   pull_request:
-  workflow_dispatch:
-    inputs:
-      release-version:
-        # github.event_name == 'workflow_dispatch'
-        # && github.event.inputs.release-version
-        description: >-
-          Target PEP440-compliant version to release.
-          Please, don't prepend `v`.
-        required: true
-      release-commitish:
-        # github.event_name == 'workflow_dispatch'
-        # && github.event.inputs.release-commitish
-        default: ''
-        description: >-
-          The commit to be released to PyPI and tagged
-          in Git as `release-version`. Normally, you
-          should keep this empty.
-        required: false
-      YOLO:
-        default: false
-        description: >-
-          Flag whether test results should block the
-          release (true/false). Only use this under
-          extraordinary circumstances to ignore the
-          test failures and cut the release regardless.
-        required: false
   schedule:
   - cron: 1 0 * * *  # Run daily at 0:01 UTC
 
@@ -130,7 +101,7 @@ jobs:
     - name: Set up pip cache
       if: >-
         steps.request-check.outputs.release-requested != 'true'
-      uses: actions/cache@v3.0.11
+      uses: actions/cache@v3.0.8
       with:
         path: ${{ steps.pip-cache-dir.outputs.dir }}
         key: >-
@@ -194,7 +165,6 @@ jobs:
             && github.event.inputs.release-version
             || steps.scm-version.outputs.dist-version
         }}-py3-none-any.whl')
-
   build:
     name: >-
       👷 dists ${{ needs.pre-setup.outputs.git-tag }}
@@ -239,7 +209,7 @@ jobs:
       run: >-
         echo "::set-output name=dir::$(python -m pip cache dir)"
     - name: Set up pip cache
-      uses: actions/cache@v3.0.11
+      uses: actions/cache@v3.0.8
       with:
         path: ${{ steps.pip-cache-dir.outputs.dir }}
         key: >-
@@ -258,7 +228,6 @@ jobs:
         --user
         --upgrade
         build
-
     - name: Grab the source from Git
       uses: actions/checkout@v3
       with:
@@ -309,7 +278,6 @@ jobs:
           dist/${{ needs.pre-setup.outputs.sdist-artifact-name }}
           dist/${{ needs.pre-setup.outputs.wheel-artifact-name }}
         retention-days: 30
-
   lint:
     name: 🧹 Lint
 
@@ -343,7 +311,7 @@ jobs:
       run: >-
         echo "::set-output name=dir::$(python -m pip cache dir)"
     - name: Set up pip cache
-      uses: actions/cache@v3.0.11
+      uses: actions/cache@v3.0.8
       with:
         path: ${{ steps.pip-cache-dir.outputs.dir }}
         key: >-
@@ -406,19 +374,19 @@ jobs:
         - ubuntu-latest
         py:
         - '3.7'
-        - '3.8'
-        - '3.9'
-        - '3.10'
-        - '3.11'
+        # - '3.8'
+        # - '3.9'
+        # - '3.10'
+        # - '3.11-dev'
         db:
-        - [mysql, '5.7']
+        # - [mysql, '5.7']
         - [mysql, '8.0']
-        - [mariadb, '10.3']
-        - [mariadb, '10.4']
-        - [mariadb, '10.5']
-        - [mariadb, '10.6']
-        - [mariadb, '10.7']
-        - [mariadb, '10.8']
+        # - [mariadb, '10.3']
+        # - [mariadb, '10.4']
+        # - [mariadb, '10.5']
+        # - [mariadb, '10.6']
+        # - [mariadb, '10.7']
+        # - [mariadb, '10.8']
 
       fail-fast: false
     runs-on: ${{ matrix.os }}
@@ -449,10 +417,16 @@ jobs:
         options: '--name=mysqld'
         env:
           MYSQL_ROOT_PASSWORD: rootpw
+      haproxy:
+        image: haproxytech/haproxy-alpine:2.6
+        ports:
+          - 13306:13306
+        volumes:
+        - "/tmp/run-${{ join(matrix.db, '-') }}/:/var/lib/haproxy/socket-mount/"
+        options: '--name=haproxy'
 
     steps:
     - name: Setup Python ${{ matrix.py }}
-      id: python-install
       uses: actions/setup-python@v4
       with:
         python-version: ${{ matrix.py }}
@@ -488,7 +462,7 @@ jobs:
 
     - name: Set up pip cache
       if: fromJSON(steps.py-abi.outputs.is-stable-abi)
-      uses: actions/cache@v3.0.11
+      uses: actions/cache@v3.0.8
       with:
         path: ${{ steps.pip-cache-dir.outputs.dir }}
         key: >-
@@ -570,6 +544,18 @@ jobs:
     # unfortunately we need this hacky workaround as GitHub Actions service containers can't reference data from our repo.
     - name: Prepare mysql
       run: |
+        # we need to ensure that the socket path is readable from haproxy and
+        # writable for the user running the DB process
+        sudo chmod 0777 /tmp/run-${{ join(matrix.db, '-') }}
+
+        # inject HAproxy configuration
+        docker container stop haproxy
+
+        docker container cp "${{ github.workspace }}/tests/ssl_resources/haproxy.cfg" haproxy:/usr/local/etc/haproxy/haproxy.cfg
+        docker container cp "${{ github.workspace }}/tests/ssl_resources/ssl/server-combined.pem" haproxy:/usr/local/etc/haproxy/haproxy.pem
+
+        docker container start haproxy
+
         # ensure server is started up
         while :
         do
@@ -583,9 +569,6 @@ jobs:
         docker container cp "${{ github.workspace }}/tests/ssl_resources/tls.cnf" mysqld:/etc/mysql/conf.d/aiomysql-tls.cnf
 
         # use custom socket path
-        # we need to ensure that the socket path is writable for the user running the DB process in the container
-        sudo chmod 0777 /tmp/run-${{ join(matrix.db, '-') }}
-
         docker container cp "${{ github.workspace }}/tests/ssl_resources/socket.cnf" mysqld:/etc/mysql/conf.d/aiomysql-socket.cnf
 
         docker container start mysqld
@@ -600,26 +583,33 @@ jobs:
         mysql -h127.0.0.1 -uroot "-p$MYSQL_ROOT_PASSWORD" -e "SET GLOBAL local_infile=on"
 
     - name: Run tests
-      run: |
-        # timeout ensures a more or less clean stop by sending a KeyboardInterrupt which will still provide useful logs
-        timeout --preserve-status --signal=INT --verbose 570s \
-          pytest --capture=no --verbosity 2 --cov-report term --cov-report xml --cov aiomysql --cov tests ./tests --mysql-unix-socket "unix-${{ join(matrix.db, '') }}=/tmp/run-${{ join(matrix.db, '-') }}/mysql.sock" --mysql-address "tcp-${{ join(matrix.db, '') }}=127.0.0.1:3306"
+      # timeout ensures a more or less clean stop by sending a KeyboardInterrupt which will still provide useful logs
+      run: >-
+        timeout
+        --preserve-status
+        --signal=INT
+        --verbose 570s
+        pytest
+        --capture=no
+        --verbosity 2
+        --cov-report term
+        --cov-report xml
+        --cov aiomysql
+        --cov tests
+        ./tests
+        --mysql-unix-socket "unix-${{ join(matrix.db, '') }}=/tmp/run-${{ join(matrix.db, '-') }}/mysql.sock"
+        --mysql-address "tcp-${{ join(matrix.db, '') }}=127.0.0.1:3306"
+        --mysql-address-tls "tls-${{ join(matrix.db, '') }}=127.0.0.1:13306"
       env:
         PYTHONUNBUFFERED: 1
       timeout-minutes: 10
 
     - name: Upload coverage
       if: ${{ github.event_name != 'schedule' }}
-      uses: codecov/codecov-action@v3.1.1
+      uses: codecov/codecov-action@v3.1.0
       with:
         file: ./coverage.xml
-        flags: >-
-          CI-GHA,
-          OS-${{ runner.os }},
-          VM-${{ matrix.os }},
-          Py-${{ steps.python-install.outputs.python-version }},
-          DB-${{ join(matrix.db, '-') }},
-          ${{ matrix.os }}_${{ matrix.py }}_${{ join(matrix.db, '-') }}
+        flags: "${{ matrix.os }}_${{ matrix.py }}_${{ join(matrix.db, '-') }}"
         fail_ci_if_error: true
 
   check:  # This job does nothing and is only used for the branch protection
@@ -633,140 +623,6 @@ jobs:
 
     steps:
     - name: Decide whether the needed jobs succeeded or failed
-      uses: re-actors/alls-green@v1.2.2
+      uses: re-actors/alls-green@v1.1.0
       with:
         jobs: ${{ toJSON(needs) }}
-
-  publish-pypi:
-    name: Publish 🐍📦 ${{ needs.pre-setup.outputs.git-tag }} to PyPI
-    needs:
-    - check
-    - pre-setup  # transitive, for accessing settings
-    if: >-
-      fromJSON(needs.pre-setup.outputs.release-requested)
-    runs-on: ubuntu-latest
-
-    environment:
-      name: pypi
-      url: >-
-        https://pypi.org/project/aiomysql/${{
-          needs.pre-setup.outputs.dist-version
-        }}
-
-    steps:
-    - name: Download all the dists
-      uses: actions/download-artifact@v3
-      with:
-        name: python-package-distributions
-        path: dist/
-    - name: >-
-        Publish 🐍📦 ${{ needs.pre-setup.outputs.git-tag }} to PyPI
-      uses: pypa/gh-action-pypi-publish@v1.5.1
-      with:
-        password: ${{ secrets.PYPI_API_TOKEN }}
-        print_hash: true
-
-  publish-testpypi:
-    name: Publish 🐍📦 ${{ needs.pre-setup.outputs.git-tag }} to TestPyPI
-    needs:
-    - check
-    - pre-setup  # transitive, for accessing settings
-    if: >-
-      fromJSON(needs.pre-setup.outputs.is-untagged-devel)
-      || fromJSON(needs.pre-setup.outputs.release-requested)
-    runs-on: ubuntu-latest
-
-    environment:
-      name: testpypi
-      url: >-
-        https://test.pypi.org/project/aiomysql/${{
-          needs.pre-setup.outputs.dist-version
-        }}
-
-    steps:
-    - name: Download all the dists
-      uses: actions/download-artifact@v3
-      with:
-        name: python-package-distributions
-        path: dist/
-    - name: >-
-        Publish 🐍📦 ${{ needs.pre-setup.outputs.git-tag }} to TestPyPI
-      uses: pypa/gh-action-pypi-publish@v1.5.1
-      with:
-        password: ${{ secrets.PYPI_API_TOKEN }}
-        repository_url: https://test.pypi.org/legacy/
-        print_hash: true
-
-  post-release-repo-update:
-    name: >-
-      Publish post-release Git tag
-      for ${{ needs.pre-setup.outputs.git-tag }}
-    needs:
-    - publish-pypi
-    - pre-setup  # transitive, for accessing settings
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Fetch the src snapshot
-      uses: actions/checkout@v3
-      with:
-        fetch-depth: 1
-        ref: ${{ github.event.inputs.release-commitish }}
-    - name: Setup git user as [bot]
-      uses: fregante/setup-git-user@2e28d51939d2a84005a917d2f844090637f435f8
-
-    - name: >-
-        Tag the release in the local Git repo
-        as v${{ needs.pre-setup.outputs.git-tag }}
-      run: >-
-        git tag
-        -m '${{ needs.pre-setup.outputs.git-tag }}'
-        '${{ needs.pre-setup.outputs.git-tag }}'
-        --
-        ${{ github.event.inputs.release-commitish }}
-    - name: >-
-        Push ${{ needs.pre-setup.outputs.git-tag }} tag corresponding
-        to the just published release back to GitHub
-      run: >-
-        git push --atomic origin '${{ needs.pre-setup.outputs.git-tag }}'
-
-  publish-github-release:
-    name: >-
-      Publish a tag and GitHub release for
-      ${{ needs.pre-setup.outputs.git-tag }}
-    needs:
-    - post-release-repo-update
-    - pre-setup  # transitive, for accessing settings
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: write
-      discussions: write
-
-    steps:
-    - name: Fetch the src snapshot
-      uses: actions/checkout@v3
-      with:
-        fetch-depth: 1
-        ref: ${{ github.event.inputs.release-commitish }}
-
-    - name: Download all the dists
-      uses: actions/download-artifact@v3
-      with:
-        name: python-package-distributions
-        path: dist/
-
-    - name: >-
-        Publish a GitHub Release for
-        ${{ needs.pre-setup.outputs.git-tag }}
-      uses: ncipollo/release-action@4c75f0f2e4ae5f3c807cf0904605408e319dcaac
-      with:
-        artifacts: |
-          dist/${{ needs.pre-setup.outputs.sdist-artifact-name }}
-          dist/${{ needs.pre-setup.outputs.wheel-artifact-name }}
-        artifactContentType: raw  # Because whl and tgz are of different types
-        # FIXME: Use Towncrier once it is integrated.
-        bodyFile: CHANGES.txt
-        discussionCategory: Announcements
-        name: ${{ needs.pre-setup.outputs.git-tag }}
-        tag: ${{ needs.pre-setup.outputs.git-tag }}
